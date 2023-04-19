@@ -16,9 +16,9 @@ foreach (var i in Enumerable.Range(0, 100))
     // Create a batch of events 
     using var eventBatch = await producerClient.CreateBatchAsync();
     // Add events to the batch. An event is a represented by a collection of bytes and metadata. 
-    eventBatch.TryAdd(new EventData(Encoding.UTF8.GetBytes("Event: "+ i)));
+    eventBatch.TryAdd(new EventData(Encoding.UTF8.GetBytes(i.ToString())));
     // Use the producer client to send the batch of events to the event hub
     await producerClient.SendAsync(eventBatch);
-    Console.WriteLine($"A batch of {i} events has been published.");
+    Console.WriteLine($"Publish: {i}");
     await Task.Delay(1000);
 }
