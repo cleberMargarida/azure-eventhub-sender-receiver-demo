@@ -1,47 +1,124 @@
-﻿using System;
-using System.Text;
-using System.Threading.Tasks;
-using Azure.Storage.Blobs;
+﻿using Azure.Core;
+using Azure.Identity;
 using Azure.Messaging.EventHubs;
-using Azure.Messaging.EventHubs.Consumer;
 using Azure.Messaging.EventHubs.Processor;
+using Azure.Storage.Blobs;
+using Ingestion.Api.Dto;
+using Newtonsoft.Json;
+using Serilog;
+using System;
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
-const string connectionString = "Endpoint=sb://hackergamepass0401.servicebus.windows.net/;SharedAccessKeyName=sender;SharedAccessKey=R+P2ozg5E52qn2zypTBoEn658le0LM/qk+AEhCeY5e0=;EntityPath=test-event-hub";
-const string eventHubName = "test-event-hub";
-const string blobStorageConnectionString = "DefaultEndpointsProtocol=https;AccountName=hackergamepass;AccountKey=Xii/PW4qITaYyDgOyzdWSIETKKSKTziRCZiuw6rwIsJAimvzCUZdCwdgqEVi0j6FlrDV0imlSg1K+AStvvJCIw==;EndpointSuffix=core.windows.net";
-const string blobContainerName = "test-blob";
-string consumerGroup = EventHubConsumerClient.DefaultConsumerGroupName;
+BlobContainerClient storageClient = new BlobContainerClient(
+    connectionString: "DefaultEndpointsProtocol=https;AccountName=checkpointstoremb;AccountKey=0rDx40FQNpfikhnvQOOvQ7yeHVkH0hC5BIYvD/OPlkJreqwb1yN8ekGfMRjx6L0oRAe6wUREb/BD+ASt4567Jg==;EndpointSuffix=core.windows.net",
+    blobContainerName: "signallogcheckpoint"
+);
 
-// Create a blob container client that the event processor will use 
-BlobContainerClient storageClient = new BlobContainerClient(blobStorageConnectionString, blobContainerName);
+TokenCredential credential = new ClientSecretCredential(
+    tenantId: "9652d7c2-1ccf-4940-8151-4a92bd474ed0",
+    clientId: "23ef8095-16a5-46f9-b8eb-3b46c45450aa",
+    clientSecret: "8Wk8Q~BrjTUDYSEr1jHfCDElMYgEhKKuicvtBaoJ"
+);
 
-// Create an event processor client to process events in the event hub
-EventProcessorClient processor = new EventProcessorClient(storageClient, consumerGroup, connectionString, eventHubName);
+EventProcessorClient processor = new EventProcessorClient(
+    checkpointStore: storageClient,
+    consumerGroup: "cdbstream",
+    fullyQualifiedNamespace: "csg-weu-prod-smp-eh-mbbstream.servicebus.windows.net",
+    eventHubName: "csg-weu-prod-smp-eh-streaming-mbbstream",
+    credential: credential
+);
 
-// Register handlers for processing events and handling errors
+Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.File("log.txt", rollingInterval: RollingInterval.Day)
+            .CreateLogger();
+
+Log.Information("HashCode,DeviceId,SignalName,Value,TimeStamp,DateTimeUTC,PartitionId,SequenceNumber,EnqueuedTime");
+
+AppDomain.CurrentDomain.ProcessExit += FlushLog;
+
+const int EventsBeforeCheckpoint = 50;
+ConcurrentDictionary<string, int> PartitionEventCount = new ConcurrentDictionary<string, int>();
+ConcurrentDictionary<Guid, int> DuplicatedSignalsCount = new ConcurrentDictionary<Guid, int>();
+
 processor.ProcessEventAsync += ProcessEventHandler;
 processor.ProcessErrorAsync += ProcessErrorHandler;
 
-// Start the processing
 await processor.StartProcessingAsync();
+await Task.Delay(Timeout.Infinite);
 
-// Wait for 10 seconds for the events to be processed
-await Task.Delay(TimeSpan.FromSeconds(1000));
-
-// Stop the processing
 async Task ProcessEventHandler(ProcessEventArgs eventArgs)
 {
-    // Write the body of the event to the console window
-    Console.WriteLine("\tReceived: {0}", Encoding.UTF8.GetString(eventArgs.Data.Body.ToArray()));
+    LogAsync(eventArgs);
 
-    // Update checkpoint in the blob storage so that the app receives only new events the next time it's run
-    await eventArgs.UpdateCheckpointAsync(eventArgs.CancellationToken);
+    int eventsSinceLastCheckpoint = PartitionEventCount.AddOrUpdate(
+        key: eventArgs.Partition.PartitionId,
+        addValue: 1,
+        updateValueFactory: (_, currentCount) => currentCount + 1);
+
+    if (eventsSinceLastCheckpoint >= EventsBeforeCheckpoint)
+    {
+        await eventArgs.UpdateCheckpointAsync();
+        PartitionEventCount[eventArgs.Partition.PartitionId] = 0;
+    }
+}
+
+Task LogAsync(ProcessEventArgs eventArgs)
+{
+    var @event = JsonConvert.SerializeObject(eventArgs.Data.Properties);
+    var message = Encoding.UTF8.GetString(eventArgs.Data.Body.ToArray());
+
+    var signals = JsonConvert.DeserializeObject<Signals>(message, new JsonSerializerSettings()
+    {
+        Culture = CultureInfo.InvariantCulture,
+    });
+
+    foreach (var signal in signals.Items)
+    {
+        var copiesCount = DuplicatedSignalsCount.AddOrUpdate(
+        key: signal.HashCode,
+        addValue: 1,
+        updateValueFactory: HandleDuplicate);
+
+        if (copiesCount > 1)
+        {
+            continue;
+        }
+
+        Log.Information(string.Join(",", new[]
+        {
+            signal.HashCode,
+            eventArgs.Data.Properties["deviceId"],
+            signal.SignalName,
+            signal.Value?.ToString() ?? JsonConvert.SerializeObject(signal.KeyValue),
+            signal.TimeStamp.ToString(),
+            signal.DateTimeUTC.ToString(),
+            eventArgs.Partition.PartitionId,
+            eventArgs.Data.SequenceNumber.ToString(),
+            eventArgs.Data.EnqueuedTime.ToString(),
+        }));
+    }
+
+    return Task.CompletedTask;
+}
+
+int HandleDuplicate(Guid key, int currentCount)
+{
+    Console.WriteLine($"Find duplicated to signal: {key}");
+    return ++currentCount;
 }
 
 Task ProcessErrorHandler(ProcessErrorEventArgs eventArgs)
 {
-    // Write details about the error to the console window
-    Console.WriteLine($"\tPartition '{eventArgs.PartitionId}': an unhandled exception was encountered. This was not expected to happen.");
-    Console.WriteLine(eventArgs.Exception.Message);
+    Console.WriteLine(eventArgs.Exception);
     return Task.CompletedTask;
+}
+
+void FlushLog(object sender, EventArgs e)
+{
+    Log.CloseAndFlush();
 }

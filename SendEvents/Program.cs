@@ -11,14 +11,15 @@ const string eventHubName = "test-event-hub";
 // Create a producer client that you can use to send events to an event hub
 await using var producerClient = new EventHubProducerClient(connectionString, eventHubName);
 
-foreach (var i in Enumerable.Range(0, 100))
+foreach (var i in Enumerable.Range(0, 1000))
 {
+    var message = Guid.NewGuid();
     // Create a batch of events 
     using var eventBatch = await producerClient.CreateBatchAsync();
     // Add events to the batch. An event is a represented by a collection of bytes and metadata. 
-    eventBatch.TryAdd(new EventData(Encoding.UTF8.GetBytes(i.ToString())));
+    eventBatch.TryAdd(new EventData(Encoding.UTF8.GetBytes(message.ToString())));
     // Use the producer client to send the batch of events to the event hub
     await producerClient.SendAsync(eventBatch);
-    Console.WriteLine($"Publish: {i}");
-    await Task.Delay(1000);
+    Console.WriteLine($"Publish: {message}");
+    //await Task.Delay(1000);
 }

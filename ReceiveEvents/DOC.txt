@@ -1,0 +1,4 @@
+﻿point to Mercedes event hub - ok
+write all incoming data (every message) to a rolling csv file (use a file logger like serilog or log4net) so we can rule out dup from mercedes - in proggress
+have an in memory concurrentdictionary that writes a message everytime a duplicate is found along with details of the message in a different file.    
+do checkpointing with 50 as we do today
