@@ -1,25 +1,79 @@
-﻿using System;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Azure.Messaging.EventHubs;
+﻿using Azure.Messaging.EventHubs;
 using Azure.Messaging.EventHubs.Producer;
+using System;
+using System.Text;
 
-const string connectionString = "Endpoint=sb://hackergamepass0401.servicebus.windows.net/;SharedAccessKeyName=sender;SharedAccessKey=R+P2ozg5E52qn2zypTBoEn658le0LM/qk+AEhCeY5e0=;EntityPath=test-event-hub";
-const string eventHubName = "test-event-hub";
+const string connectionString = "";
+await using var producerClient = new EventHubProducerClient(connectionString);
 
-// Create a producer client that you can use to send events to an event hub
-await using var producerClient = new EventHubProducerClient(connectionString, eventHubName);
-
-foreach (var i in Enumerable.Range(0, 1000))
+const string MessageBase =
+"""
 {
-    var message = Guid.NewGuid();
-    // Create a batch of events 
-    using var eventBatch = await producerClient.CreateBatchAsync();
-    // Add events to the batch. An event is a represented by a collection of bytes and metadata. 
-    eventBatch.TryAdd(new EventData(Encoding.UTF8.GetBytes(message.ToString())));
-    // Use the producer client to send the batch of events to the event hub
-    await producerClient.SendAsync(eventBatch);
-    Console.WriteLine($"Publish: {message}");
-    //await Task.Delay(1000);
+    "signals":
+    [
+        {
+            "id": 6054,
+            "timestamp": 1682289369443,
+            "treatment": 1,
+            "value": 100.755
+        }
+    ]
 }
+""";
+
+while (true)
+{
+    using var eventBatch = await producerClient.CreateBatchAsync();
+    var message = MessageBase.Replace("1682289369443", UtcNowTimeStamp());
+    var eventData = new EventData(Encoding.UTF8.GetBytes(message.ToString()));
+    eventData.Properties["deviceId"] = "ctp-3620003708";
+
+    eventData.Properties["bsId"] = "d34ddc59-dc25-4132-ad20-dd9b6707ddc0";
+    eventData.Properties["ctpDispatchedTimestamp"] = 1683729553872;
+    eventData.Properties["processedTimestamp"] = 1683729701585;
+    eventData.Properties["vin"] = "9BM384078PB267453";
+    eventData.Properties["ctpSendCounter"] = 7616;
+    eventData.Properties["iothubEnqueuedTimestamp"] = "2023-05-10T14:41:40.193Z";
+    eventData.Properties["version"] = 3;
+    eventData.Properties["trackingId"] = "ctp-0460009013-1683729699591-17391";
+
+    eventBatch.TryAdd(eventData);   
+    Console.WriteLine("Press any key to enqueue...");
+    Console.ReadKey();
+    await producerClient.SendAsync(eventBatch);
+    Console.WriteLine("message enqueued: " + message);
+}
+
+static string UtcNowTimeStamp() => ((long)(DateTime.UtcNow - DateTime.UnixEpoch).TotalMilliseconds).ToString();
+
+/*
+"""
+    "signals":
+    [
+         {"id":"5555","timestamp":1683124730000,"value":null,"keyValue":[{"Key":500,"Value":0.0},{"Key":501,"Value":24.200003},{"Key":504,"Value":-22.889584},{"Key":505,"Value":-42.03309},{"Key":506,"Value":12.0},{"Key":507,"Value":0.0},{"Key":503,"Value":225.642},{"Key":502,"Value":1.76}]}
+    ]
+
+    "signals":
+    [
+        {
+            "id": 6054,
+            "timestamp": 1682289369443,
+            "treatment": 1,
+            "value": 12.755
+        }
+    ]
+"""; 
+
+{
+    "bsId": "d34ddc59-dc25-4132-ad20-dd9b6707ddc0",
+    "ctpDispatchedTimestamp": 1683729553872,
+    "processedTimestamp": 1683729701585,
+    "vin": "9BM384078PB267453",
+    "ctpSendCounter": 7616,
+    "deviceId": "ctp-0460009013",
+    "iothubEnqueuedTimestamp": "2023-05-10T14:41:40.193Z",
+    "version": 3,
+    "trackingId": "ctp-0460009013-1683729699591-17391"
+} 
+
+ */
